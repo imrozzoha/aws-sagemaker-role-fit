@@ -6,7 +6,7 @@ data "aws_caller_identity" "current" {}
 
 locals {
   # HuggingFace PyTorch inference DLC — CPU, ap-southeast-2
-  hf_image_uri = "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04"
+  hf_image_uri = "763104351884.dkr.ecr.${var.aws_region}.amazonaws.com/huggingface-pytorch-inference:2.1.0-transformers4.37.0-cpu-py310-ubuntu22.04-v1.1"
 }
 
 # ── SageMaker ────────────────────────────────────────────────────────────────
