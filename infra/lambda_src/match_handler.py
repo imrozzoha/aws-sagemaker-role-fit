@@ -10,7 +10,7 @@ SAGEMAKER_ENDPOINT = os.environ["SAGEMAKER_ENDPOINT"]
 EMBEDDINGS_BUCKET  = os.environ["EMBEDDINGS_BUCKET"]
 EMBEDDINGS_KEY     = os.environ["EMBEDDINGS_KEY"]
 CORS_ORIGIN        = os.environ.get("CORS_ORIGIN", "*")
-MAX_INPUT_CHARS    = 3000
+MAX_INPUT_CHARS    = 1800  # ~512 tokens for all-MiniLM-L6-v2
 
 _profile_embeddings = None
 
@@ -24,7 +24,7 @@ def _load_profile_embeddings():
 
 
 def _get_embedding(text: str) -> list:
-    payload = json.dumps({"inputs": text})
+    payload = json.dumps({"inputs": text, "parameters": {"truncation": True}})
     resp = sagemaker_runtime.invoke_endpoint(
         EndpointName=SAGEMAKER_ENDPOINT,
         ContentType="application/json",
