@@ -1,0 +1,13 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+lambda_match.zip
+lambda_pkg/
+__pycache__/
+*.pyc
+.env
+profile_embeddings.json
