@@ -1,15 +1,20 @@
 import json
 import math
 import os
+import time
+import uuid
+from datetime import datetime, timezone
 import boto3
 
 sagemaker_runtime = boto3.client("sagemaker-runtime")
 s3 = boto3.client("s3")
+dynamodb = boto3.client("dynamodb")
 
 SAGEMAKER_ENDPOINT = os.environ["SAGEMAKER_ENDPOINT"]
 EMBEDDINGS_BUCKET  = os.environ["EMBEDDINGS_BUCKET"]
 EMBEDDINGS_KEY     = os.environ["EMBEDDINGS_KEY"]
 CORS_ORIGIN        = os.environ.get("CORS_ORIGIN", "*")
+FEEDBACK_TABLE     = os.environ.get("FEEDBACK_TABLE", "")
 MAX_INPUT_CHARS    = 8000   # allow full JDs; chunking handles the token limit
 CHUNK_SIZE         = 1400   # ~400 tokens per chunk, safely under 512-token model limit
 CHUNK_OVERLAP      = 150    # character overlap so boundary context isn't lost
@@ -92,9 +97,61 @@ def _cors_headers() -> dict:
     }
 
 
+def _feedback_handler(event: dict) -> dict:
+    if not FEEDBACK_TABLE:
+        return {
+            "statusCode": 503,
+            "headers": _cors_headers(),
+            "body": json.dumps({"error": "feedback storage not configured"}),
+        }
+
+    try:
+        body = json.loads(event.get("body") or "{}")
+        analysis_id = body.get("analysis_id", "").strip()
+        accurate = body.get("accurate")
+        reasons = body.get("reasons", [])
+        comment = body.get("comment", "").strip()[:500]
+
+        if not analysis_id or accurate is None:
+            return {
+                "statusCode": 400,
+                "headers": _cors_headers(),
+                "body": json.dumps({"error": "analysis_id and accurate are required"}),
+            }
+
+        item = {
+            "analysis_id": {"S": analysis_id},
+            "timestamp":   {"S": datetime.now(timezone.utc).isoformat()},
+            "accurate":    {"BOOL": bool(accurate)},
+            "ttl":         {"N": str(int(time.time()) + 7_776_000)},  # 90 days
+        }
+        if reasons:
+            item["reasons"] = {"L": [{"S": str(r)} for r in reasons[:10]]}
+        if comment:
+            item["comment"] = {"S": comment}
+
+        dynamodb.put_item(TableName=FEEDBACK_TABLE, Item=item)
+
+        return {
+            "statusCode": 200,
+            "headers": _cors_headers(),
+            "body": json.dumps({"ok": True}),
+        }
+
+    except Exception as exc:
+        return {
+            "statusCode": 500,
+            "headers": _cors_headers(),
+            "body": json.dumps({"error": str(exc)}),
+        }
+
+
 def handler(event: dict, context) -> dict:
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 200, "headers": _cors_headers(), "body": ""}
+
+    if "/feedback" in event.get("path", ""):
+        return _feedback_handler(event)
 
     try:
         body = json.loads(event.get("body") or "{}")
@@ -119,11 +176,16 @@ def handler(event: dict, context) -> dict:
             }
 
         overall = round(sum(d["score"] for d in domains.values()) / len(domains))
+        analysis_id = str(uuid.uuid4())
 
         return {
             "statusCode": 200,
             "headers": _cors_headers(),
-            "body": json.dumps({"overall_match": overall, "domains": domains}),
+            "body": json.dumps({
+                "analysis_id":   analysis_id,
+                "overall_match": overall,
+                "domains":       domains,
+            }),
         }
 
     except Exception as exc:

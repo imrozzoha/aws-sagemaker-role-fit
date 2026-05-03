@@ -91,6 +91,26 @@ resource "aws_s3_bucket_public_access_block" "embeddings" {
   restrict_public_buckets = true
 }
 
+# ── DynamoDB (feedback storage) ───────────────────────────────────────────────
+
+resource "aws_dynamodb_table" "feedback" {
+  name         = "${var.project_name}-feedback"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "analysis_id"
+
+  attribute {
+    name = "analysis_id"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "ttl"
+    enabled        = true
+  }
+
+  tags = var.tags
+}
+
 # ── Lambda ────────────────────────────────────────────────────────────────────
 
 resource "aws_iam_role" "lambda" {
@@ -126,6 +146,11 @@ resource "aws_iam_role_policy" "lambda" {
         Effect   = "Allow"
         Action   = ["s3:GetObject"]
         Resource = "${aws_s3_bucket.embeddings.arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["dynamodb:PutItem"]
+        Resource = aws_dynamodb_table.feedback.arn
       }
     ]
   })
@@ -147,6 +172,7 @@ resource "aws_lambda_function" "match" {
       EMBEDDINGS_BUCKET  = aws_s3_bucket.embeddings.bucket
       EMBEDDINGS_KEY     = "profile_embeddings.json"
       CORS_ORIGIN        = var.cors_allowed_origin
+      FEEDBACK_TABLE     = aws_dynamodb_table.feedback.name
     }
   }
 
@@ -226,9 +252,96 @@ resource "aws_api_gateway_integration_response" "options" {
   depends_on = [aws_api_gateway_method_response.options]
 }
 
+# ── /feedback resource ────────────────────────────────────────────────────────
+
+resource "aws_api_gateway_resource" "feedback" {
+  rest_api_id = aws_api_gateway_rest_api.match.id
+  parent_id   = aws_api_gateway_rest_api.match.root_resource_id
+  path_part   = "feedback"
+}
+
+# POST /feedback
+resource "aws_api_gateway_method" "feedback_post" {
+  rest_api_id   = aws_api_gateway_rest_api.match.id
+  resource_id   = aws_api_gateway_resource.feedback.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "feedback_post" {
+  rest_api_id             = aws_api_gateway_rest_api.match.id
+  resource_id             = aws_api_gateway_resource.feedback.id
+  http_method             = aws_api_gateway_method.feedback_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.match.invoke_arn
+}
+
+# OPTIONS /feedback (CORS preflight)
+resource "aws_api_gateway_method" "feedback_options" {
+  rest_api_id   = aws_api_gateway_rest_api.match.id
+  resource_id   = aws_api_gateway_resource.feedback.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "feedback_options" {
+  rest_api_id = aws_api_gateway_rest_api.match.id
+  resource_id = aws_api_gateway_resource.feedback.id
+  http_method = aws_api_gateway_method.feedback_options.http_method
+  type        = "MOCK"
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "feedback_options" {
+  rest_api_id = aws_api_gateway_rest_api.match.id
+  resource_id = aws_api_gateway_resource.feedback.id
+  http_method = aws_api_gateway_method.feedback_options.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "feedback_options" {
+  rest_api_id = aws_api_gateway_rest_api.match.id
+  resource_id = aws_api_gateway_resource.feedback.id
+  http_method = aws_api_gateway_method.feedback_options.http_method
+  status_code = "200"
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type'"
+    "method.response.header.Access-Control-Allow-Methods" = "'POST,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'${var.cors_allowed_origin}'"
+  }
+  depends_on = [aws_api_gateway_method_response.feedback_options]
+}
+
 resource "aws_api_gateway_deployment" "match" {
   rest_api_id = aws_api_gateway_rest_api.match.id
-  depends_on  = [aws_api_gateway_integration.post, aws_api_gateway_integration_response.options]
+
+  triggers = {
+    redeployment = sha1(jsonencode([
+      aws_api_gateway_integration.post.id,
+      aws_api_gateway_integration_response.options.id,
+      aws_api_gateway_integration.feedback_post.id,
+      aws_api_gateway_integration_response.feedback_options.id,
+    ]))
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  depends_on = [
+    aws_api_gateway_integration.post,
+    aws_api_gateway_integration_response.options,
+    aws_api_gateway_integration.feedback_post,
+    aws_api_gateway_integration_response.feedback_options,
+  ]
 }
 
 resource "aws_api_gateway_stage" "prod" {
