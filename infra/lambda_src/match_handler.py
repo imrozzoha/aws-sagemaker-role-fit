@@ -15,6 +15,7 @@ EMBEDDINGS_BUCKET  = os.environ["EMBEDDINGS_BUCKET"]
 EMBEDDINGS_KEY     = os.environ["EMBEDDINGS_KEY"]
 CORS_ORIGIN        = os.environ.get("CORS_ORIGIN", "*")
 FEEDBACK_TABLE     = os.environ.get("FEEDBACK_TABLE", "")
+ANALYSES_TABLE     = os.environ.get("ANALYSES_TABLE", "")
 MAX_INPUT_CHARS    = 8000   # allow full JDs; chunking handles the token limit
 CHUNK_SIZE         = 1400   # ~400 tokens per chunk, safely under 512-token model limit
 CHUNK_OVERLAP      = 150    # character overlap so boundary context isn't lost
@@ -177,6 +178,22 @@ def handler(event: dict, context) -> dict:
 
         overall = round(sum(d["score"] for d in domains.values()) / len(domains))
         analysis_id = str(uuid.uuid4())
+
+        if ANALYSES_TABLE:
+            try:
+                dynamodb.put_item(TableName=ANALYSES_TABLE, Item={
+                    "analysis_id":   {"S": analysis_id},
+                    "timestamp":     {"S": datetime.now(timezone.utc).isoformat()},
+                    "overall_match": {"N": str(overall)},
+                    "domains":       {"S": json.dumps({
+                        k: {"label": v["label"], "score": v["score"]}
+                        for k, v in domains.items()
+                    })},
+                    "jd_excerpt":    {"S": jd_text[:500]},
+                    "ttl":           {"N": str(int(time.time()) + 2_592_000)},  # 30 days
+                })
+            except Exception:
+                pass  # non-fatal — analysis is still returned to client
 
         return {
             "statusCode": 200,
