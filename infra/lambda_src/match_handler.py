@@ -173,7 +173,7 @@ def handler(event: dict, context) -> dict:
             sim = _cosine_similarity(jd_embedding, data["embedding"])
             domains[key] = {
                 "label": data["label"],
-                "score": max(0, min(100, round(sim * 155))),
+                "score": max(0, min(100, round(sim * 165))),
             }
 
         overall = round(sum(d["score"] for d in domains.values()) / len(domains))
