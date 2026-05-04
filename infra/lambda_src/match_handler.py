@@ -189,7 +189,7 @@ def handler(event: dict, context) -> dict:
                         k: {"label": v["label"], "score": v["score"]}
                         for k, v in domains.items()
                     })},
-                    "jd_excerpt":    {"S": jd_text[:500]},
+                    "jd_excerpt":    {"S": jd_text[:3000]},
                     "ttl":           {"N": str(int(time.time()) + 2_592_000)},  # 30 days
                 })
             except Exception:
